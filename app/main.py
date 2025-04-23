@@ -319,6 +319,47 @@ while not keyboard.Down(hg.K_Escape):
 				mat, hg.Vec3(0, 0, 0), hg.DTHA_Left, hg.DTVA_Top,
 				[font_color_white], [], text_render_state)
 
+	# Draw angle display menu
+	angle_display_x = res_x - 250
+	angle_display_y = 100
+	panel_width = 200
+	panel_height = 180
+
+	# Draw background panel for angle display
+	panel_vtx = hg.Vertices(vtx_layout, 4)
+	panel_vtx.Begin(0).SetPos(hg.Vec3(angle_display_x, angle_display_y, 1)).SetTexCoord0(hg.Vec2(0, 1)).End()
+	panel_vtx.Begin(1).SetPos(hg.Vec3(angle_display_x, angle_display_y + panel_height, 1)).SetTexCoord0(hg.Vec2(0, 0)).End()
+	panel_vtx.Begin(2).SetPos(hg.Vec3(angle_display_x + panel_width, angle_display_y + panel_height, 1)).SetTexCoord0(hg.Vec2(1, 0)).End()
+	panel_vtx.Begin(3).SetPos(hg.Vec3(angle_display_x + panel_width, angle_display_y, 1)).SetTexCoord0(hg.Vec2(1, 1)).End()
+	panel_idx = [0, 3, 2, 0, 2, 1]
+
+	# Semi-transparent black background
+	bg_color = hg.MakeUniformSetValue("uColor", hg.Vec4(0, 0, 0, 0.7))
+	hg.DrawTriangles(view_id, panel_idx, panel_vtx, shader_for_plane, [bg_color], [], render_state_quad)
+
+	# Draw title
+	title_mat = hg.TranslationMat4(hg.Vec3(angle_display_x + 10, angle_display_y + 10, 1))
+	hg.SetS(title_mat, hg.Vec3(1, -1, 1))
+	hg.DrawText(view_id,
+				font,
+				"Joint Angles", shader_font, "u_tex", 0,
+				title_mat, hg.Vec3(0, 0, 0), hg.DTHA_Left, hg.DTVA_Top,
+				[font_color], [], text_render_state)
+
+	# Draw angle values for each motor
+	for i, motor in enumerate(hg_motors):
+		angle_mat = hg.TranslationMat4(hg.Vec3(angle_display_x + 10, angle_display_y + 40 + i * 22, 1))
+		hg.SetS(angle_mat, hg.Vec3(1, -1, 1))
+		
+		# Format the angle value to 1 decimal place
+		angle_text = f"Joint {i+1}: {motor['v']:.1f}°"
+		
+		hg.DrawText(view_id,
+					font,
+					angle_text, shader_font, "u_tex", 0,
+					angle_mat, hg.Vec3(0, 0, 0), hg.DTHA_Left, hg.DTVA_Top,
+					[font_color_white], [], text_render_state)
+
 	# Toggle dancing mode
 	dancing_mode = toggle_button(
 		"Dancing Mode ON" if dancing_mode else "Dancing Mode OFF", dancing_mode, 100, res_y - 80)
