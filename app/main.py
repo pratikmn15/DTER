@@ -4,6 +4,7 @@ import math
 from OrbitalCam import OrbitalController
 from statistics import median
 
+
 # helpers
 def clamp(v, v_min, v_max):
 	return max(v_min, min(v, v_max))
@@ -31,6 +32,15 @@ mousexlist = []
 mouseylist = []
 has_switched = False
 dancing_mode = False
+
+# Add these near the beginning of the file with other global variables
+power_consumption = 0.0  # Total power consumed in joules
+power_rate = {
+    "idle": 0.5,         # Base power consumption when idle (watts)
+    "movement": 2.0,     # Additional power when moving (watts per degree/sec)
+    "holding": 0.8       # Power to maintain position against gravity (watts)
+}
+last_positions = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # Last recorded position for each joint
 
 win = hg.NewWindow("Harfang - Robot Simulator", res_x, res_y, 32)
 hg.RenderInit(win)
@@ -300,6 +310,32 @@ while not keyboard.Down(hg.K_Escape):
 		hg.DrawModel(view_id_scene_alpha, hg_m["quad_jauge_axis"], shader_rotator, [
 			progress], [texture_asset1], m_world, render_state_quad_occluded)
 
+	# Calculate power consumption for this frame
+	frame_power = power_rate["idle"] * hg.time_to_sec_f(dt)  # Base idle power
+
+	for id, m in enumerate(hg_motors):
+		hg_m = hg_motors[id]
+		
+		# Calculate power from movement (proportional to speed)
+		position_change = abs(hg_m["v"] - last_positions[id])
+		movement_speed = position_change / hg.time_to_sec_f(dt) if hg.time_to_sec_f(dt) > 0 else 0
+		movement_power = movement_speed * power_rate["movement"] * hg.time_to_sec_f(dt)
+		
+		# Calculate power from holding position against gravity
+		# More power needed for horizontal positions than vertical
+		angle_rad = abs(hg_m["v"] * pi / 180.0)
+		gravity_factor = abs(math.sin(angle_rad)) if hg_m["axis"] != "Y" else abs(math.cos(angle_rad))
+		holding_power = gravity_factor * power_rate["holding"] * hg.time_to_sec_f(dt)
+		
+		# Add this joint's power to the frame total
+		frame_power += movement_power + holding_power
+		
+		# Update last position for next frame
+		last_positions[id] = hg_m["v"]
+
+	# Add frame power to total
+	power_consumption += frame_power
+
 	# Draw UI
 	hg.SetViewFrameBuffer(view_id, hg.InvalidFrameBufferHandle)
 	hg.SetViewRect(view_id, 0, 0, res_x, res_y)
@@ -359,6 +395,59 @@ while not keyboard.Down(hg.K_Escape):
 					angle_text, shader_font, "u_tex", 0,
 					angle_mat, hg.Vec3(0, 0, 0), hg.DTHA_Left, hg.DTVA_Top,
 					[font_color_white], [], text_render_state)
+
+	# Add after the joint angles display
+
+	# Draw power consumption panel
+	power_display_x = res_x - 250
+	power_display_y = angle_display_y + panel_height + 20
+	power_panel_width = 200
+	power_panel_height = 80
+
+	# Draw background panel for power display
+	power_panel_vtx = hg.Vertices(vtx_layout, 4)
+	power_panel_vtx.Begin(0).SetPos(hg.Vec3(power_display_x, power_display_y, 1)).SetTexCoord0(hg.Vec2(0, 1)).End()
+	power_panel_vtx.Begin(1).SetPos(hg.Vec3(power_display_x, power_display_y + power_panel_height, 1)).SetTexCoord0(hg.Vec2(0, 0)).End()
+	power_panel_vtx.Begin(2).SetPos(hg.Vec3(power_display_x + power_panel_width, power_display_y + power_panel_height, 1)).SetTexCoord0(hg.Vec2(1, 0)).End()
+	power_panel_vtx.Begin(3).SetPos(hg.Vec3(power_display_x + power_panel_width, power_display_y, 1)).SetTexCoord0(hg.Vec2(1, 1)).End()
+	power_panel_idx = [0, 3, 2, 0, 2, 1]
+
+	# Semi-transparent black background
+	hg.DrawTriangles(view_id, power_panel_idx, power_panel_vtx, shader_for_plane, [bg_color], [], render_state_quad)
+
+	# Draw title
+	power_title_mat = hg.TranslationMat4(hg.Vec3(power_display_x + 10, power_display_y + 10, 1))
+	hg.SetS(power_title_mat, hg.Vec3(1, -1, 1))
+	hg.DrawText(view_id,
+				font,
+				"Power Consumption", shader_font, "u_tex", 0,
+				power_title_mat, hg.Vec3(0, 0, 0), hg.DTHA_Left, hg.DTVA_Top,
+				[font_color], [], text_render_state)
+
+	# Display total power consumption
+	power_text_mat = hg.TranslationMat4(hg.Vec3(power_display_x + 10, power_display_y + 40, 1))
+	hg.SetS(power_text_mat, hg.Vec3(1, -1, 1))
+
+	# Format power values - show joules for small values, kJ for larger values
+	power_text = f"Total: {power_consumption:.2f} J" if power_consumption < 1000 else f"Total: {power_consumption/1000:.2f} kJ"
+
+	hg.DrawText(view_id,
+				font,
+				power_text, shader_font, "u_tex", 0,
+				power_text_mat, hg.Vec3(0, 0, 0), hg.DTHA_Left, hg.DTVA_Top,
+				[font_color_white], [], text_render_state)
+
+	# Display current power rate
+	rate_text_mat = hg.TranslationMat4(hg.Vec3(power_display_x + 10, power_display_y + 60, 1))
+	hg.SetS(rate_text_mat, hg.Vec3(1, -1, 1))
+	current_rate = frame_power / hg.time_to_sec_f(dt) if hg.time_to_sec_f(dt) > 0 else 0
+	rate_text = f"Current: {current_rate:.2f} W"
+
+	hg.DrawText(view_id,
+				font,
+				rate_text, shader_font, "u_tex", 0,
+				rate_text_mat, hg.Vec3(0, 0, 0), hg.DTHA_Left, hg.DTVA_Top,
+				[font_color_white], [], text_render_state)
 
 	# Toggle dancing mode
 	dancing_mode = toggle_button(
