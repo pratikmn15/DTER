@@ -42,6 +42,17 @@ power_rate = {
 }
 last_positions = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # Last recorded position for each joint
 
+# Add these near the beginning of the file with other global variables
+joint_temperatures = [25.0, 25.0, 25.0, 25.0, 25.0, 25.0]  # Initial temperature in Celsius
+temperature_params = {
+    "ambient": 22.0,       # Ambient temperature in Celsius
+    "max_safe": 60.0,      # Maximum safe operating temperature
+    "critical": 75.0,      # Critical temperature threshold
+    "heating_rate": 0.15,  # How quickly motors heat up during movement
+    "cooling_rate": 0.05,  # How quickly motors cool down when idle
+    "power_factor": 0.3    # Temperature increase based on power consumption
+}
+
 win = hg.NewWindow("Harfang - Robot Simulator", res_x, res_y, 32)
 hg.RenderInit(win)
 hg.RenderReset(res_x, res_y, hg.RF_MSAA8X | hg.RF_FlipAfterRender |
@@ -336,6 +347,65 @@ while not keyboard.Down(hg.K_Escape):
 	# Add frame power to total
 	power_consumption += frame_power
 
+	# Add this after the power consumption calculation but before drawing UI
+
+	# Update joint temperatures based on movement and power consumption
+	for id, m in enumerate(hg_motors):
+		hg_m = hg_motors[id]
+		current_temp = joint_temperatures[id]
+		
+		# Calculate temperature change based on movement and power consumption
+		movement_speed = abs(hg_m["v"] - last_positions[id]) / hg.time_to_sec_f(dt) if hg.time_to_sec_f(dt) > 0 else 0
+		
+		# Calculate power for this specific joint
+		angle_rad = abs(hg_m["v"] * pi / 180.0)
+		gravity_factor = abs(math.sin(angle_rad)) if hg_m["axis"] != "Y" else abs(math.cos(angle_rad))
+		holding_power = gravity_factor * power_rate["holding"] * hg.time_to_sec_f(dt)
+		movement_power = movement_speed * power_rate["movement"] * hg.time_to_sec_f(dt)
+		power_used = movement_power + holding_power
+		
+		 # Enhanced heating logic:
+		# 1. Immediate temperature increase directly tied to movement
+		# 2. Higher heating when near joint limits (motor strain)
+		# 3. Additional heating from power consumption
+		
+		# Base temperature increase from movement
+		temp_increase = 0.0000000001
+		
+		# Immediate response to movement (even small movements generate heat)
+		if movement_speed > 0:
+			# Base heating proportional to movement speed
+			temp_increase = movement_speed * temperature_params["heating_rate"] * hg.time_to_sec_f(dt)
+			
+			# Extra heating when moving at high speeds
+			if movement_speed > 40:  # Fast movement threshold
+				temp_increase *= 1.5  # 50% more heat at high speeds
+				
+			# Extra heating when near limits (motor strain)
+			limit_margin = 10  # degrees from limit where strain increases
+			to_upper_limit = hg_m["upper_limit"] - hg_m["v"]
+			to_lower_limit = hg_m["v"] - hg_m["lower_limit"]
+			
+			if to_upper_limit < limit_margin or to_lower_limit < limit_margin:
+				# Calculate how close to the limit (0-1 range)
+				limit_factor = 1.0 - min(to_upper_limit, to_lower_limit) / limit_margin
+				if limit_factor > 0:  # Only apply if within the margin
+					temp_increase *= (1.0 + limit_factor)  # Up to double heating at the limit
+		
+		# Additional heating from power consumption
+		temp_increase += power_used * temperature_params["power_factor"]
+		
+		# Motors cool down toward ambient temperature
+		cooling_factor = temperature_params["cooling_rate"] * hg.time_to_sec_f(dt)
+		if current_temp > temperature_params["ambient"]:
+			temp_decrease = cooling_factor * (current_temp - temperature_params["ambient"])
+		else:
+			temp_decrease = 0
+		
+		# Update temperature with all factors
+		new_temp = current_temp + temp_increase - temp_decrease
+		joint_temperatures[id] = new_temp
+
 	# Draw UI
 	hg.SetViewFrameBuffer(view_id, hg.InvalidFrameBufferHandle)
 	hg.SetViewRect(view_id, 0, 0, res_x, res_y)
@@ -448,6 +518,75 @@ while not keyboard.Down(hg.K_Escape):
 				rate_text, shader_font, "u_tex", 0,
 				rate_text_mat, hg.Vec3(0, 0, 0), hg.DTHA_Left, hg.DTVA_Top,
 				[font_color_white], [], text_render_state)
+
+	# Add after the power consumption panel, before the dancing mode toggle
+
+	# Draw temperature monitoring panel
+	temp_display_x = res_x - 250
+	temp_display_y = power_display_y + power_panel_height + 20
+	temp_panel_width = 200
+	temp_panel_height = 180
+
+	# Draw background panel for temperature display
+	temp_panel_vtx = hg.Vertices(vtx_layout, 4)
+	temp_panel_vtx.Begin(0).SetPos(hg.Vec3(temp_display_x, temp_display_y, 1)).SetTexCoord0(hg.Vec2(0, 1)).End()
+	temp_panel_vtx.Begin(1).SetPos(hg.Vec3(temp_display_x, temp_display_y + temp_panel_height, 1)).SetTexCoord0(hg.Vec2(0, 0)).End()
+	temp_panel_vtx.Begin(2).SetPos(hg.Vec3(temp_display_x + temp_panel_width, temp_display_y + temp_panel_height, 1)).SetTexCoord0(hg.Vec2(1, 0)).End()
+	temp_panel_vtx.Begin(3).SetPos(hg.Vec3(temp_display_x + temp_panel_width, temp_display_y, 1)).SetTexCoord0(hg.Vec2(1, 1)).End()
+	temp_panel_idx = [0, 3, 2, 0, 2, 1]
+
+	# Semi-transparent black background
+	hg.DrawTriangles(view_id, temp_panel_idx, temp_panel_vtx, shader_for_plane, [bg_color], [], render_state_quad)
+
+	# Draw title
+	temp_title_mat = hg.TranslationMat4(hg.Vec3(temp_display_x + 10, temp_display_y + 10, 1))
+	hg.SetS(temp_title_mat, hg.Vec3(1, -1, 1))
+	hg.DrawText(view_id,
+				font,
+				"Motor Temperatures", shader_font, "u_tex", 0,
+				temp_title_mat, hg.Vec3(0, 0, 0), hg.DTHA_Left, hg.DTVA_Top,
+				[font_color], [], text_render_state)
+
+	# Replace the temperature bar visualization with a simpler text-based display
+
+	# Draw temperature values for each motor
+	for i, temp in enumerate(joint_temperatures):
+		# Text position
+		temp_mat = hg.TranslationMat4(hg.Vec3(temp_display_x + 10, temp_display_y + 40 + i * 22, 1))
+		hg.SetS(temp_mat, hg.Vec3(1, -1, 1))
+		
+		# Determine temperature status
+		status = ""
+		if temp >= temperature_params["critical"]:
+			status = " [CRITICAL]" 
+			temp_color = hg.MakeUniformSetValue("u_color", hg.Vec4(1.0, 0.0, 0.0, 1.0))  # Red for critical
+		elif temp >= temperature_params["max_safe"]:
+			status = " [WARNING]"
+			temp_color = hg.MakeUniformSetValue("u_color", hg.Vec4(1.0, 0.5, 0.0, 1.0))  # Orange for warning
+		else:
+			temp_color = hg.MakeUniformSetValue("u_color", hg.Vec4(0.0, 1.0, 0.0, 1.0))  # Green for normal
+		
+		# Format temperature value with status indicator
+		temp_text = f"Joint {i+1}: {temp:.1f}°C{status}"
+		
+		# Draw temperature text
+		hg.DrawText(view_id,
+					font,
+					temp_text, shader_font, "u_tex", 0,
+					temp_mat, hg.Vec3(0, 0, 0), hg.DTHA_Left, hg.DTVA_Top,
+					[temp_color], [], text_render_state)
+		
+		# Add temperature threshold information below the values
+		if i == len(joint_temperatures) - 1:
+			threshold_mat = hg.TranslationMat4(hg.Vec3(temp_display_x + 10, temp_display_y + 50 + len(joint_temperatures) * 22, 1))
+			hg.SetS(threshold_mat, hg.Vec3(1, -1, 1))
+			threshold_text = f"Safe: <{temperature_params['max_safe']:.1f}°C | Critical: >{temperature_params['critical']:.1f}°C"
+			
+			hg.DrawText(view_id,
+						font,
+						threshold_text, shader_font, "u_tex", 0,
+						threshold_mat, hg.Vec3(0, 0, 0), hg.DTHA_Left, hg.DTVA_Top,
+						[font_color_white], [], text_render_state)
 
 	# Toggle dancing mode
 	dancing_mode = toggle_button(
